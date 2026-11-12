@@ -21,6 +21,7 @@ spec:
       labels:
         app: relay
     spec:
+      serviceAccountName: relay
       terminationGracePeriodSeconds: 40
       automountServiceAccountToken: false
       securityContext:
