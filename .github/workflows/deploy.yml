@@ -1,35 +1,93 @@
 name: deploy
 
 on:
+  pull_request:
   push:
     branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relay-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   AWS_REGION: eu-west-1
   ECR_REPO: 123456789012.dkr.ecr.eu-west-1.amazonaws.com/relay
 
 jobs:
-  deploy:
+  checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@v4
 
-      - uses: aws-actions/configure-aws-credentials@master
+      - uses: actions/setup-node@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install and check app
+        working-directory: app
+        run: |
+          npm ci
+          node --check src/server.js
+          node --check src/migrate.js
+          npm audit --omit=dev --audit-level=high
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform validate
+        working-directory: terraform
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate manifests
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          ./kubeconform -strict -summary k8s/
+
+      - name: Build image
+        run: docker build -t relay:${{ github.sha }} app
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: checks
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IMAGE: 123456789012.dkr.ecr.eu-west-1.amazonaws.com/relay:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to ECR
-        run: aws ecr get-login-password | docker login --username AWS --password-stdin $ECR_REPO
+        run: aws ecr get-login-password | docker login --username AWS --password-stdin "${ECR_REPO%%/*}"
 
       - name: Build and push
         run: |
-          docker build -t $ECR_REPO:latest app
-          docker push $ECR_REPO:latest
+          docker build -t "$IMAGE" app
+          docker push "$IMAGE"
 
-      - name: Deploy to production
+      - name: Deploy
         run: |
           aws eks update-kubeconfig --name relay-prod
-          kubectl apply -f k8s/
-          kubectl -n relay rollout restart deployment/relay
+          mkdir -p rendered
+          for f in 00-namespace serviceaccount configmap deployment service hpa pdb; do
+            sed "s#image: relay:latest#image: ${IMAGE}#" "k8s/$f.yaml" > "rendered/$f.yaml"
+          done
+          kubectl apply -f rendered/
+          if ! kubectl -n relay rollout status deployment/relay --timeout=300s; then
+            kubectl -n relay rollout undo deployment/relay
+            exit 1
+          fi
