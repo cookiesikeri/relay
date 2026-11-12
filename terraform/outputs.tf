@@ -6,10 +6,10 @@ output "cluster_endpoint" {
   value = aws_eks_cluster.this.endpoint
 }
 
-output "bastion_public_ip" {
-  value = aws_instance.bastion.public_ip
-}
-
 output "archive_bucket" {
   value = aws_s3_bucket.archive.bucket
+}
+
+output "relay_role_arn" {
+  value = aws_iam_role.relay.arn
 }

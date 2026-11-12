@@ -24,10 +24,17 @@ resource "aws_eks_cluster" "this" {
   role_arn = aws_iam_role.cluster.arn
 
   vpc_config {
-    subnet_ids             = [aws_subnet.public_a.id, aws_subnet.public_b.id]
-    endpoint_public_access = true
-    public_access_cidrs    = ["0.0.0.0/0"]
+    subnet_ids              = [aws_subnet.private_a.id, aws_subnet.private_b.id]
+    endpoint_private_access = true
+    endpoint_public_access  = true
+    public_access_cidrs     = var.cluster_public_access_cidrs
   }
+
+  access_config {
+    authentication_mode = "API"
+  }
+
+  enabled_cluster_log_types = ["api", "audit", "authenticator"]
 
   depends_on = [aws_iam_role_policy_attachment.cluster]
 }
@@ -65,23 +72,13 @@ resource "aws_iam_role_policy_attachment" "node_ecr" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
-# relay archives payloads to S3 and reads its config from Secrets Manager
-data "aws_iam_policy_document" "node_app" {
-  statement {
-    actions   = ["s3:*", "secretsmanager:*"]
-    resources = ["*"]
-  }
-}
-
-resource "aws_iam_role_policy" "node_app" {
-  name   = "${var.name}-app-access"
-  role   = aws_iam_role.node.id
-  policy = data.aws_iam_policy_document.node_app.json
+resource "aws_iam_role_policy_attachment" "node_ssm" {
+  role       = aws_iam_role.node.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
 resource "aws_launch_template" "nodes" {
   name_prefix = "${var.name}-nodes-"
-  key_name    = var.ssh_key_name
 
   vpc_security_group_ids = [
     aws_security_group.nodes.id,
@@ -90,8 +87,8 @@ resource "aws_launch_template" "nodes" {
 
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "optional"
-    http_put_response_hop_limit = 2
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
   }
 
   block_device_mappings {
@@ -100,7 +97,7 @@ resource "aws_launch_template" "nodes" {
     ebs {
       volume_size = 50
       volume_type = "gp3"
-      encrypted   = false
+      encrypted   = true
     }
   }
 }
@@ -109,7 +106,7 @@ resource "aws_eks_node_group" "this" {
   cluster_name    = aws_eks_cluster.this.name
   node_group_name = "${var.name}-default"
   node_role_arn   = aws_iam_role.node.arn
-  subnet_ids      = [aws_subnet.public_a.id]
+  subnet_ids      = [aws_subnet.private_a.id, aws_subnet.private_b.id]
   instance_types  = ["m5.large"]
 
   scaling_config {
@@ -128,4 +125,8 @@ resource "aws_eks_node_group" "this" {
     aws_iam_role_policy_attachment.node_cni,
     aws_iam_role_policy_attachment.node_ecr,
   ]
+
+  lifecycle {
+    ignore_changes = [scaling_config[0].desired_size]
+  }
 }

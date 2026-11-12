@@ -8,11 +8,6 @@ variable "name" {
   default = "relay-prod"
 }
 
-variable "ssh_key_name" {
-  type    = string
-  default = "relay-ops"
-}
-
 variable "app_node_port" {
   description = "NodePort the relay Service is exposed on"
   type        = number
@@ -26,6 +21,17 @@ variable "db_host" {
 }
 
 variable "db_password" {
-  type    = string
-  default = "Rel4y-prod-2024!"
+  description = "Set via TF_VAR_db_password from the secret store, never committed"
+  type        = string
+  sensitive   = true
+}
+
+variable "certificate_arn" {
+  description = "ACM certificate for the public HTTPS listener"
+  type        = string
+}
+
+variable "cluster_public_access_cidrs" {
+  description = "CIDRs allowed to reach the EKS API (VPN / CI egress)"
+  type        = list(string)
 }
