@@ -32,9 +32,26 @@ const migrations = [
   },
 ];
 
+const LOCK_ID = 7426001;
+
+async function connectWithRetry(attempts = 30) {
+  for (let i = 1; ; i++) {
+    const client = new Client({ connectionString: config.databaseUrl, connectionTimeoutMillis: 2000 });
+    try {
+      await client.connect();
+      return client;
+    } catch (err) {
+      await client.end().catch(() => {});
+      if (i >= attempts) throw err;
+      console.log(`migrate: database not reachable (${err.message}), retry ${i}/${attempts}`);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+}
+
 async function main() {
-  const client = new Client({ connectionString: config.databaseUrl });
-  await client.connect();
+  const client = await connectWithRetry();
+  await client.query('SELECT pg_advisory_lock($1)', [LOCK_ID]);
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -48,11 +65,19 @@ async function main() {
   for (const m of migrations) {
     if (applied.has(m.version)) continue;
     console.log(`migrate: applying ${m.version} (${m.name})`);
-    await client.query(m.sql);
-    await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [m.version]);
+    try {
+      await client.query('BEGIN');
+      await client.query(m.sql);
+      await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [m.version]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    }
   }
 
   console.log('migrate: up to date');
+  await client.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]);
   await client.end();
 }
 
