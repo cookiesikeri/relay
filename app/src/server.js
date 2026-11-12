@@ -29,19 +29,6 @@ function logRequest(req, res, startedAt) {
   );
 }
 
-// ------------------------------------------------------------ idempotency
-
-// Clients retry with the same Idempotency-Key. Replays are answered from
-// memory so a retry storm never reaches the database.
-const seen = new Map();
-
-function remember(key, entry) {
-  seen.set(key, entry);
-  if (config.dedupeMaxEntries > 0 && seen.size > config.dedupeMaxEntries) {
-    seen.delete(seen.keys().next().value);
-  }
-}
-
 // ---------------------------------------------------------------- archive
 
 let s3 = null;
@@ -73,12 +60,22 @@ app.use((req, res, next) => {
   next();
 });
 
+let shuttingDown = false;
+
+app.get('/livez', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
 app.get('/health', async (req, res) => {
+  if (shuttingDown) {
+    return res.status(503).json({ status: 'shutting down' });
+  }
   try {
     await pool.query('SELECT 1');
     res.json({ status: 'ok' });
   } catch (err) {
-    res.status(503).json({ status: 'unavailable', error: err.message });
+    console.error('health check failed:', err.message);
+    res.status(503).json({ status: 'unavailable' });
   }
 });
 
@@ -86,11 +83,6 @@ app.post('/events', async (req, res) => {
   const key = req.get('Idempotency-Key');
   if (!key) {
     return res.status(400).json({ error: 'Idempotency-Key header is required' });
-  }
-
-  const previous = seen.get(key);
-  if (previous) {
-    return res.status(409).json({ id: previous.id, duplicate: true });
   }
 
   const id = crypto.randomUUID();
@@ -101,12 +93,19 @@ app.post('/events', async (req, res) => {
     .digest('hex');
 
   try {
-    await pool.query(
-      'INSERT INTO events (id, idempotency_key, payload, signature) VALUES ($1, $2, $3, $4)',
+    const inserted = await pool.query(
+      `INSERT INTO events (id, idempotency_key, payload, signature) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (idempotency_key) DO NOTHING
+       RETURNING id`,
       [id, key, payload, signature],
     );
-    remember(key, { id, payload, signature });
-    await archive(id, payload);
+    if (inserted.rowCount === 0) {
+      const existing = await pool.query('SELECT id FROM events WHERE idempotency_key = $1', [key]);
+      return res.status(409).json({ id: existing.rows[0]?.id, duplicate: true });
+    }
+    archive(id, payload).catch((err) => {
+      console.error(JSON.stringify({ level: 'error', msg: 'archive failed', id, error: err.message }));
+    });
     res.status(201).json({ id, signature });
   } catch (err) {
     console.error('failed to store event:', err.message);
@@ -114,7 +113,12 @@ app.post('/events', async (req, res) => {
   }
 });
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 app.get('/events/:id', async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    return res.status(404).json({ error: 'not found' });
+  }
   try {
     const { rows } = await pool.query(
       'SELECT id, idempotency_key, payload, signature, received_at FROM events WHERE id = $1',
@@ -128,6 +132,26 @@ app.get('/events/:id', async (req, res) => {
   }
 });
 
-app.listen(config.port, () => {
+const server = app.listen(config.port, () => {
   console.log(`relay listening on :${config.port} (pool max ${config.poolMax})`);
 });
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
+
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received, draining`);
+  setTimeout(() => {
+    server.close(async () => {
+      await pool.end().catch(() => {});
+      console.log('shutdown complete');
+      process.exit(0);
+    });
+    server.closeIdleConnections();
+  }, config.shutdownDelayMs);
+  setTimeout(() => process.exit(1), config.shutdownDelayMs + 20000).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

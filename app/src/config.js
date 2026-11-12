@@ -24,9 +24,8 @@ module.exports = {
   port: int('PORT', 3000),
   databaseUrl: required('DATABASE_URL'),
   signingSecret: required('SIGNING_SECRET'),
-  poolMax: int('PG_POOL_MAX', 25),
-  // 0 means "no limit"
-  dedupeMaxEntries: int('DEDUPE_MAX_ENTRIES', 0),
+  poolMax: int('PG_POOL_MAX', 8),
+  shutdownDelayMs: int('SHUTDOWN_DELAY_MS', 5000),
   logFile: process.env.LOG_FILE || '',
   archiveBucket: process.env.ARCHIVE_BUCKET || '',
 };
