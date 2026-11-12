@@ -1,16 +1,14 @@
-FROM node:22
-
+FROM node:22-slim AS deps
 WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
+FROM node:22-slim
 ENV NODE_ENV=production
-ENV NODE_OPTIONS=--max-old-space-size=512
-
-COPY package.json .
-RUN npm ci --omit=dev
-
-COPY . .
-RUN rm -f .env
-
-EXPOSE 3000
-
-ENTRYPOINT ["sh", "./entrypoint.sh"]
+WORKDIR /app
+COPY --from=deps --chown=node:node /app/node_modules ./node_modules
+COPY --chown=node:node package.json ./
+COPY --chown=node:node src ./src
+USER node
+EXPOSE 8080
+CMD ["node", "src/server.js"]
