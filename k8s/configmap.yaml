@@ -5,5 +5,6 @@ metadata:
   namespace: relay
 data:
   PORT: "8080"
-  PG_POOL_MAX: "25"
-  LOG_FILE: /var/log/relay/access.log
+  PG_POOL_MAX: "8"
+  NODE_OPTIONS: "--max-old-space-size=320"
+  SHUTDOWN_DELAY_MS: "5000"
