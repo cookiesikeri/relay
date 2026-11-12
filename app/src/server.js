@@ -50,17 +50,18 @@ async function archive(id, payload) {
 
 // -------------------------------------------------------------------- app
 
+let shuttingDown = false;
+
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '64kb' }));
 
 app.use((req, res, next) => {
+  if (shuttingDown) res.set('Connection', 'close');
   const startedAt = Date.now();
   res.on('finish', () => logRequest(req, res, startedAt));
   next();
 });
-
-let shuttingDown = false;
 
 app.get('/livez', (req, res) => {
   res.json({ status: 'ok' });
