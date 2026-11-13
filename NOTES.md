@@ -1,8 +1,8 @@
 SHIP WITH CONDITIONS
 
-# Relay notes
+Relay notes
 
-## Results
+Results
 
 The README says 400 req/s and the handoff says 150, so I tested at 400.
 
@@ -14,7 +14,7 @@ total: sent=119993 status[201:113884 409:6109] errors[-] p50=6ms p95=10ms p99=24
 
 Rolling restart during a 400 req/s test: 0 errors.
 
-## 1. What I changed (most important first)
+1. What I changed (most important first)
 
 1. Removed leaked passwords. The staging DB password was in `app/.env` and the prod DB password in `terraform/variables.tf`. They are still in git history, so they must be rotated.
 2. Made it start.
@@ -46,7 +46,7 @@ Rolling restart during a 400 req/s test: 0 errors.
     - Added HTTPS, encrypted disks and IMDSv2.
     - The DB password is no longer in code.
 
-## 2. What I found and left
+2. What I found and left
 
 - No metrics or alerts yet. First thing I would add next.
 - S3 archive can still miss an event if a pod crashes right after saving. The fix is an outbox table and a worker.
@@ -56,7 +56,7 @@ Rolling restart during a 400 req/s test: 0 errors.
 - No image scanning, and actions are pinned to tags, not SHAs.
 - Secrets remain in git history. Rotating them is enough.
 
-## 3. Friday
+3. Friday
 
 Ship with conditions. Before Friday:
 
@@ -68,7 +68,7 @@ Ship with conditions. Before Friday:
 
 If items 1 to 3 are not done, do not ship.
 
-## 4. Questions
+4. Questions
 
 1. Is peak traffic 150 or 400 req/s?
 2. Must every event be archived to S3, or is it best effort?
